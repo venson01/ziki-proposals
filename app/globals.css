@@ -308,7 +308,8 @@ code { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 
 .doc-toc a { font-weight: 600; text-decoration: none; }
 .doc section { margin-top: 32px; }
 .doc h2 { font-size: 22px; letter-spacing: -0.01em; margin-bottom: 8px; scroll-margin-top: 72px; }
-.doc h3 { font-size: 15px; margin: 20px 0 6px; }
+.doc h3 { font-size: 15px; margin: 20px 0 6px; scroll-margin-top: 72px; }
+.doc h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 700; color: var(--zk-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .doc p, .doc li { color: var(--zk-text2); font-size: 15px; line-height: 1.65; }
 .doc p + p { margin-top: 8px; }
 .doc ul, .doc ol { padding-left: 22px; display: grid; gap: 6px; }

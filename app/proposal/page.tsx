@@ -73,6 +73,55 @@ export default function ProposalPage() {
           <li><strong>Lessons stick.</strong> After the run, any redirect that helped can be saved as a project rule in the existing Mistake Registry, so every later agent reads it before starting.</li>
         </ol>
 
+        <h3 id="where-it-fits">Where it fits in Ziki today</h3>
+        <p>
+          Live steer covers step 4 of the lifecycle, <em>Keep the claim and deliver a fix</em>: from the moment an offer is accepted until the
+          agent submits its PR. People already take part in confirming an issue (step 2), accepting an offer (step 3) and checking the result
+          (steps 5–7). Step 4 is the only stretch where they can&apos;t reach the agent. Live steer needs no new page; it fits into parts of Ziki
+          that already exist.
+        </p>
+        <h4>On screen</h4>
+        <ul>
+          <li>
+            <strong>Issue page (<code>/issues/{"{n}"}</code>).</strong> The Live steer panel goes in the main column, directly below the agent
+            decisions summary and above the status form, next to the agent&apos;s questions (escalations). It shows only while a claim is
+            active. Questions are agents asking people; steering is people directing agents, so the two belong side by side.
+          </li>
+          <li>
+            <strong>Issues list.</strong> An in-progress row already shows a tapping hammer, the agent&apos;s name and how long it has been
+            working. That status cell gains a <em>Watch &amp; steer</em> link to the panel.
+          </li>
+          <li>
+            <strong>Inbox.</strong> A run that is paused and waiting for a redirect joins <em>Need your input</em>, alongside agent questions,
+            so the person who paused it doesn&apos;t forget it.
+          </li>
+          <li>
+            <strong>Activity timeline.</strong> Every pause, redirect and agent acknowledgement becomes an entry in the issue&apos;s activity
+            sidebar, so the history stays with the issue.
+          </li>
+        </ul>
+        <h4>Behind the scenes</h4>
+        <ul>
+          <li>
+            <strong>Claim heartbeat</strong> (<code>POST /api/v1/issues/{"{id}"}/heartbeat</code>). Agents holding a claim already call it.
+            Its reply can also deliver waiting steering. Heartbeats default to every 15 minutes, which is too slow on its own, so checkpoint
+            steps (below) are the main channel and the heartbeat is the fallback.
+          </li>
+          <li>
+            <strong>Event stream</strong> (<code>GET /api/v1/events/stream</code>). Pushes steps, pauses, redirects and acknowledgements to
+            everyone watching the issue page.
+          </li>
+          <li>
+            <strong>Claim deadline</strong> (<code>POST /api/v1/issues/{"{id}"}/extend</code>). Ziki already manages how long a claim lasts.
+            Pausing stops that clock and resuming restarts it.
+          </li>
+          <li>
+            <strong>Mistake Registry</strong> (<code>POST /api/v1/projects/{"{id}"}/mistakes</code>). <em>Save as project rule</em> writes
+            here, and agents already read the registry (<code>GET</code>) before starting work.
+          </li>
+        </ul>
+        <p>The only new data is the run&apos;s steps and the steer requests, both attached to the existing claim.</p>
+
         <h3>API sketch</h3>
         <p>Additive changes to the agent API, following the conventions in <code>docs/ziki-for-agents.md</code>.</p>
         <Code>{`# Agent posts a step (and its next intent)
@@ -84,6 +133,9 @@ POST /api/v1/issues/{id}/run/steps
 # The response carries any steering waiting for the agent: no extra polling
 200 { "steer": [{ "id": "st_91", "action": "redirect",
                   "preset": "no_schema", "note": "", "by": "Ada Nwosu" }] }
+
+# The existing claim heartbeat carries it too, for agents between checkpoints
+POST /api/v1/issues/{id}/heartbeat  →  200 { "claim": { ... }, "steer": [ ... ] }
 
 # Agent acknowledges and says how its plan changed
 POST /api/v1/issues/{id}/steer/{steerId}/ack
