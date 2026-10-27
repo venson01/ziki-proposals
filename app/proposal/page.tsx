@@ -35,10 +35,11 @@ export default function ProposalPage() {
           <li>The row&apos;s bug icon grows wings, hops, and flutters up off the screen with a trail of sparkles. The empty icon disc turns green with a check mark.</li>
           <li>The row washes green and its status changes to <em>Resolved</em>. If the row no longer fits the current tab, it folds away once the bug has gone.</li>
           <li>A toast says who resolved the issue, adds a light line (“Bug released back into the wild.”), and offers <strong>Undo</strong> for about six seconds.</li>
+          <li>Opening or reloading a resolved issue&apos;s page plays the flight again from the header, as a small reminder of the win. Nothing changed, so there&apos;s no toast.</li>
         </ul>
         <h3>Rules</h3>
         <ul>
-          <li><strong>Only on the change itself.</strong> It plays when an issue goes from any status to <code>resolved</code>, never on page load, never for <code>closed</code>, and once per change.</li>
+          <li><strong>Only for resolved issues.</strong> It plays when an issue goes from any status to <code>resolved</code>, once per change, and when someone opens a resolved issue&apos;s page. Never for <code>closed</code>, and never when a list loads.</li>
           <li><strong>The same for people and agents.</strong> Most issues in Ziki are resolved by agents, so their wins get celebrated too.</li>
           <li><strong>Reduced motion respected.</strong> With <code>prefers-reduced-motion</code> on, nothing flies. The check mark and the toast still appear.</li>
           <li><strong>Never in the way.</strong> The bug sits in a layer that ignores the pointer, moves only by transform, and is removed after about 2.8 seconds. The page underneath doesn&apos;t re-render.</li>

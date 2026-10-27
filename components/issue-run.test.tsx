@@ -2,7 +2,15 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueRun } from "./issue-run";
-import { resetDemo } from "@/lib/store";
+import { AppShell } from "./app-shell";
+import { changeStatus, resetDemo } from "@/lib/store";
+import { launchBug } from "@/lib/bug-flight";
+
+vi.mock("next/navigation", () => ({ usePathname: () => "/issues/1409" }));
+vi.mock("@/lib/bug-flight", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/bug-flight")>()),
+  launchBug: vi.fn(() => Promise.resolve()),
+}));
 
 const TICK = 2600;
 
@@ -14,6 +22,61 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.mocked(launchBug).mockClear();
+});
+
+describe("opening a resolved issue", () => {
+  const header = () => document.querySelector<HTMLElement>(".dt-head")!;
+  beforeEach(() => {
+    // jsdom lays nothing out; give the bug icon a size so it can take off.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 20, top: 100, width: 48, height: 48 } as DOMRect);
+  });
+
+  it("sets the bug free again, without a toast", () => {
+    render(<AppShell><IssueRun number={1409} /></AppShell>);
+    expect(header().dataset.celebrating).toBeUndefined();
+    act(() => vi.advanceTimersByTime(350));
+    expect(header().dataset.celebrating).toBe("flying");
+    expect(launchBug).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(launchBug).mock.calls[0][1]).toMatchObject({ seed: 1409 });
+    expect(screen.getByRole("status").textContent).toBe("");
+    act(() => vi.advanceTimersByTime(2000));
+    expect(header().dataset.celebrating).toBeUndefined();
+  });
+
+  it("plays for an issue resolved earlier, as after a reload", () => {
+    changeStatus(1413, "resolved");
+    act(() => vi.advanceTimersByTime(3000));
+    vi.mocked(launchBug).mockClear();
+    render(<IssueRun number={1413} />);
+    act(() => vi.advanceTimersByTime(350));
+    expect(launchBug).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't play for open or closed issues", () => {
+    render(<IssueRun number={1427} />);
+    cleanup();
+    render(<IssueRun number={1402} />);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(launchBug).not.toHaveBeenCalled();
+    expect(header().dataset.celebrating).toBeUndefined();
+  });
+
+  it("stays still with reduced motion", () => {
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true }) as unknown as typeof window.matchMedia;
+    render(<IssueRun number={1409} />);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(launchBug).not.toHaveBeenCalled();
+    expect(header().dataset.celebrating).toBeUndefined();
+  });
+
+  it("is cancelled when the page closes before take-off", () => {
+    const { unmount } = render(<IssueRun number={1409} />);
+    unmount();
+    act(() => vi.advanceTimersByTime(3000));
+    expect(launchBug).not.toHaveBeenCalled();
+  });
 });
 
 describe("IssueRun", () => {

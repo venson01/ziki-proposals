@@ -20,7 +20,7 @@ import {
 } from "@/lib/agent-run";
 import { STATUSES, formatAge, formatIssueNumber, isDone, severityLabels, statusLabels, type Issue, type Status } from "@/lib/issues";
 import { detailFor, type BotDecision, type IssueDetail } from "@/lib/issue-details";
-import { changeStatus, useIssuesStore, type CelebrationPhase } from "@/lib/store";
+import { changeStatus, replayResolved, useIssuesStore, type CelebrationPhase } from "@/lib/store";
 import {
   BotIcon,
   CheckIcon,
@@ -645,6 +645,9 @@ function RunningIssue({ issue, celebrating, onRestart }: { issue: Issue; celebra
 export function IssueRun({ number }: { number: number }) {
   const { issues, celebrating } = useIssuesStore();
   const [runKey, setRunKey] = useState(0);
+  // Opening (or reloading) a resolved issue sets its bug free again. Keyed on the
+  // number only: a resolve on this page already celebrates through changeStatus.
+  useEffect(() => replayResolved(number), [number]);
   const issue = issues.find((item) => item.number === number);
   if (!issue) {
     return (

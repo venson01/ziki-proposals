@@ -5,7 +5,7 @@ Two proposals for [Ziki](https://ziki.dev), the issue tracker where people and A
 | Route | What it shows |
 | --- | --- |
 | `/` | Overview of both proposals |
-| `/issues` | **The bug flies away.** A replica of the Ziki Issues list. Set an issue to *Resolved*, or click *Let an agent resolve one*: the issue's bug grows wings and flutters off the screen, the row turns green and folds away, and a message offers Undo. |
+| `/issues` | **The bug flies away.** A replica of the Ziki Issues list. Set an issue to *Resolved*, or click *Let an agent resolve one*: the issue's bug grows wings and flutters off the screen, the row turns green and folds away, and a message offers Undo. Opening or reloading a resolved issue's page (for example `/issues/1409`) plays the flight again. |
 | `/issues/1432` | **Live steer & pause.** Watch an agent work on an issue step by step. Pause it or redirect it; both take effect at checkpoints the agent marks as safe. The agent acknowledges and its plan updates. When it finishes, the issue resolves and the bug flies off. |
 | `/proposal` | The write-up: the problem, the design, an API sketch, safety rules, rollout and measures. |
 

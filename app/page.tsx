@@ -17,7 +17,8 @@ export default function Home() {
           <span className="home-card-title">The bug flies away</span>
           <span className="home-card-body">
             When an issue becomes Resolved, its bug grows wings and flutters off the Issues list, leaving sparkles behind. It plays
-            whether a person or an agent resolves the issue, comes with an Undo, and stays still for anyone who prefers reduced motion.
+            whether a person or an agent resolves the issue, comes with an Undo, and plays again whenever a resolved issue&apos;s page
+            is opened. It stays still for anyone who prefers reduced motion.
           </span>
           <span className="home-card-cta">Open the Issues list →</span>
         </Link>

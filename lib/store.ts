@@ -117,6 +117,38 @@ export function changeStatus(number: number, status: Status, by: string = "You")
   }, settle);
 }
 
+/** Give a freshly opened page a moment to lay out before reading where the bug sits. */
+const REPLAY_DELAY_MS = 350;
+
+/**
+ * Replays the bug flying off for an issue that is already resolved, when its
+ * page is opened or reloaded. Nothing changed, so there's no toast or Undo;
+ * with reduced motion it does nothing, since the check mark already shows.
+ * Returns a cancel function for effect cleanup.
+ */
+export function replayResolved(number: number): () => void {
+  load();
+  const issue = state.issues.find((item) => item.number === number);
+  if (issue?.status !== "resolved" || prefersReducedMotion()) return () => {};
+  let settle: number | undefined;
+  const start = window.setTimeout(() => {
+    setPhase(number, "flying");
+    const origin = originFor(number);
+    if (origin) launchBug(origin, { duration: FLIGHT_MS, seed: number });
+    settle = window.setTimeout(() => {
+      settle = undefined;
+      setPhase(number, null);
+    }, FLIGHT_MS);
+  }, REPLAY_DELAY_MS);
+  return () => {
+    window.clearTimeout(start);
+    if (settle !== undefined) {
+      window.clearTimeout(settle);
+      setPhase(number, null);
+    }
+  };
+}
+
 export function undoAnnouncement() {
   const undo = state.announcement?.undo;
   dismissAnnouncement();
