@@ -1,0 +1,4 @@
+# Settings only (no workspace packages): let these dependencies run their install scripts.
+onlyBuiltDependencies:
+  - esbuild
+  - unrs-resolver
