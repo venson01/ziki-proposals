@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useId, useReducer, useRef, useState } from "react";
 import {
   REDIRECT_PRESETS,
   claimDeadline,
@@ -19,12 +19,12 @@ import {
   type RunState,
 } from "@/lib/agent-run";
 import { STATUSES, formatAge, formatIssueNumber, isDone, severityLabels, statusLabels, type Issue, type Status } from "@/lib/issues";
-import { detailFor, type BotDecision, type IssueDetail } from "@/lib/issue-details";
+import { detailFor, shortSaying, stageLabels, type BotDecision, type IssueComment, type IssueDetail } from "@/lib/issue-details";
+import { avatarTone, initialsOf } from "@/lib/avatar";
 import { changeStatus, replayResolved, useIssuesStore, type CelebrationPhase } from "@/lib/store";
 import {
   BotIcon,
   CheckIcon,
-  ChevronUpIcon,
   CommentIcon,
   EditIcon,
   FlagIcon,
@@ -37,7 +37,6 @@ import {
   SearchIcon,
   SteerIcon,
   TestIcon,
-  TypeIcon,
   UserIcon,
 } from "@/components/icons";
 
@@ -92,10 +91,18 @@ function PhasePill({ state }: { state: RunState }) {
   }
 }
 
-function BotAvatar({ name, size = 36 }: { name: string; size?: number }) {
+/** The bot face from the real decisions strip, on the agent's tone, with an optional verdict badge. */
+function BotAvatar({ name, verdict, small = false }: { name: string; verdict?: BotDecision["kind"]; small?: boolean }) {
   return (
-    <span className="dt-bot" style={{ width: size, height: size }} aria-hidden="true" title={name}>
-      <BotIcon size={Math.round(size / 2)} />
+    <span className={`bot-avatar${small ? " is-small" : ""}`} aria-hidden="true" title={name}>
+      <span className={`bot-avatar-face tone-${avatarTone(name)}`}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <rect x="4" y="8" width="16" height="12" rx="3" />
+          <path d="M12 8V4M9 14h.01M15 14h.01" strokeLinecap="round" />
+          <circle cx="12" cy="3.5" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+      {verdict ? <span className={`bot-avatar-verdict is-${verdict}`}><VerdictGlyph kind={verdict} /></span> : null}
     </span>
   );
 }
@@ -267,7 +274,7 @@ function LiveSteerCard({
   const humanSteers = state.events.filter((e) => e.actor === "human").length;
 
   return (
-    <section id="live" className="dt-card ls" data-phase={state.phase} aria-labelledby="ls-heading">
+    <section id="live" className="iss-card ls" data-phase={state.phase} aria-labelledby="ls-heading">
       <div className="ls-head">
         <BotAvatar name={agent} />
         <div className="ls-who">
@@ -366,7 +373,7 @@ function LiveSteerCard({
       )}
 
       <div className="ls-steps">
-        <h3 className="dt-label">Recent steps</h3>
+        <h3 className="iss-label">Recent steps</h3>
         {events.length === 0 ? <p className="muted ls-empty">{agent} is starting…</p> : null}
         <ol className="run-timeline">
           {shown.map((event) => <StepRow key={event.id} event={event} agent={agent} />)}
@@ -400,51 +407,339 @@ function LiveSteerCard({
   );
 }
 
-/** Agent decisions at a glance, like the real strip: a count tile and a card per bot. */
-function DecisionsStrip({ decisions }: { decisions: BotDecision[] }) {
-  if (decisions.length === 0) return null;
-  const confirmations = decisions.filter((d) => d.kind === "confirmed").length;
+function VerdictGlyph({ kind }: { kind: BotDecision["kind"] }) {
   return (
-    <section aria-label="Agent decisions" className="dt-card dt-decisions">
-      <div className={`dt-decisions-count${confirmations >= 2 ? " is-passed" : ""}`}>
-        <strong className="tabular">{decisions.length}</strong>
-        <span>{decisions.length === 1 ? "bot" : "bots"}</span>
-      </div>
-      <ul>
-        {decisions.map((decision) => (
-          <li key={`${decision.agent}-${decision.kind}`} className="dt-bot-card">
-            <BotAvatar name={decision.agent} size={32} />
-            <span>
-              <span className="dt-bot-name">{decision.agent}</span>
-              <span className="dt-bot-saying">“{decision.saying}”</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+      {kind === "claimed" ? <path d="M12 5v14M5 12h14" strokeLinecap="round" /> : <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />}
+    </svg>
+  );
+}
+
+/** What a decision means, in a sentence, for the expanded list. */
+function decisionSentence(decision: BotDecision): React.ReactNode {
+  if (decision.kind === "claimed") {
+    return <><strong>{decision.agent}</strong> claimed this issue for {decision.person}.</>;
+  }
+  return (
+    <>
+      <strong>{decision.agent}</strong> confirmed this issue is real
+      {decision.severity ? <> and rated it {severityLabels[decision.severity].toLowerCase()} priority</> : null} on behalf of {decision.person}.
+    </>
+  );
+}
+
+/** Agent decisions, as components/agent-decisions-summary.tsx draws them: a count tile and a drifting strip of bot cards. */
+function AgentDecisionsSummary({ decisions, passed }: { decisions: BotDecision[]; passed: boolean }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const animate = decisions.length >= 3;
+  const cards = (copy: boolean) => (
+    <ul className="ads-cards" aria-hidden={copy || undefined}>
+      {decisions.map((decision) => (
+        <li key={`${decision.agent}-${decision.kind}`}>
+          <button type="button" tabIndex={copy ? -1 : undefined} className="ads-card" title={`Show what ${decision.agent} said`} onClick={() => setOpen(true)}>
+            <BotAvatar name={decision.agent} verdict={decision.kind} />
+            <span className="ads-card-text">
+              <span className="ads-card-name">{decision.agent}</span>
+              <span className="ads-card-saying">“{shortSaying(decision)}”</span>
             </span>
-          </li>
-        ))}
-      </ul>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+  return (
+    <section aria-label="Agent decisions" className="iss-card is-strip">
+      <div className="ads-row">
+        <div className={`ads-count${passed ? " is-passed" : ""}`}>
+          {passed ? (
+            <span className="ads-passed" title="Passed">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" aria-hidden="true"><path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              <span className="sr-only">Passed</span>
+            </span>
+          ) : null}
+          <span className="ads-number tabular">{decisions.length}</span>
+          <h2 className="ads-label">Agent decisions</h2>
+        </div>
+        {decisions.length === 0 ? (
+          <p className="ads-empty">No agent decisions yet.</p>
+        ) : (
+          <div className={`ads-marquee${animate ? " is-animated" : ""}`}>
+            <div className="ads-track" style={animate ? ({ "--ads-duration": `${decisions.length * 6}s` } as React.CSSProperties) : undefined}>
+              {cards(false)}
+              {animate ? cards(true) : null}
+            </div>
+          </div>
+        )}
+      </div>
+      {decisions.length > 0 ? (
+        <>
+          <button type="button" className="ads-toggle" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(!open)}>
+            <span>{open ? "Hide decisions" : `Show all ${decisions.length} decisions`}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" className={open ? "is-open" : undefined}><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+          {open ? (
+            <ol id={panelId} className="ads-list">
+              {decisions.map((decision) => (
+                <li key={`${decision.agent}-${decision.kind}`}>
+                  <BotAvatar name={decision.agent} verdict={decision.kind} />
+                  <p>{decisionSentence(decision)}</p>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </>
+      ) : null}
     </section>
   );
 }
 
-type ActivityItem = { key: string; icon: React.ReactNode; text: string; when: string; human?: boolean };
+function PersonAvatar({ name, solid = false }: { name: string; solid?: boolean }) {
+  return <span className={`iss-avatar ${solid ? "is-solid" : `tone-${avatarTone(name)}`}`} aria-hidden="true">{initialsOf(name)}</span>;
+}
 
-/** The Activity box: steer events from the run, newest first, then the issue's history. */
-function activityFor(issue: Issue, detail: IssueDetail, state: RunState | null): ActivityItem[] {
-  const steering: ActivityItem[] = state
+/** A person as UserNameWithBadges shows them: avatar, name, "via agent" pill, Creator badge. */
+function PersonName({ name, agent, creator = false }: { name: string; agent?: string; creator?: boolean }) {
+  return (
+    <span className="iss-person">
+      <PersonAvatar name={name} />
+      <span className="iss-person-name">{name}</span>
+      {agent ? (
+        <span className="iss-agent-pill" aria-label={`via ${agent} (agent)`}>
+          <span>via {agent}</span>
+          <span className="iss-agent-tag" aria-hidden="true">agent</span>
+        </span>
+      ) : null}
+      {creator ? <span className="iss-creator">Creator</span> : null}
+    </span>
+  );
+}
+
+/** The large vote control from the issue header ("Upvote 14"). */
+function VoteControl({ votes }: { votes: number }) {
+  const [upvoted, setUpvoted] = useState(false);
+  const count = votes + (upvoted ? 1 : 0);
+  return (
+    <button
+      type="button"
+      className={`iss-vote${upvoted ? " is-on" : ""}`}
+      aria-pressed={upvoted}
+      aria-label={`${upvoted ? "Upvoted" : "Upvote"} ${count} ${count === 1 ? "vote" : "votes"}`}
+      onClick={() => setUpvoted(!upvoted)}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6" /></svg>
+      <span>{upvoted ? "Upvoted" : "Upvote"}</span>
+      <span className="iss-vote-count tabular">{count}</span>
+    </button>
+  );
+}
+
+/** "Update status" (components/update-issue-form.tsx without triage rights): one select and Save changes. */
+function UpdateStatusCard({ issue }: { issue: Issue }) {
+  const [draft, setDraft] = useState<Status>(issue.status);
+  const [seen, setSeen] = useState<Status>(issue.status);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  // An agent can change the status too: follow it unless there's an unsaved edit.
+  if (issue.status !== seen) {
+    setSeen(issue.status);
+    setDraft(issue.status);
+  }
+  const dirty = draft !== issue.status;
+  return (
+    <form
+      className="iss-card is-form"
+      aria-labelledby="iss-update-heading"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!dirty) return;
+        changeStatus(issue.number, draft);
+        setSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }));
+      }}
+    >
+      <h2 id="iss-update-heading" className="iss-form-title">Update status</h2>
+      <div className="iss-form-grid">
+        <div>
+          <label htmlFor="iss-status" className="iss-field-label">Status</label>
+          <select
+            id="iss-status"
+            className="iss-select"
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value as Status);
+              setSavedAt(null);
+            }}
+          >
+            {STATUSES.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
+          </select>
+        </div>
+      </div>
+      <p role="status" aria-live="polite" className="iss-saved">
+        {savedAt ? <>Saved. <span>{savedAt}</span></> : null}
+      </p>
+      <div className="iss-form-actions">
+        <button type="submit" className="iss-button is-primary" disabled={!dirty}>Save changes</button>
+        {dirty ? <span className="iss-unsaved">Unsaved changes</span> : null}
+      </div>
+    </form>
+  );
+}
+
+function MergeDecisionsCard() {
+  return (
+    <section className="iss-card is-wide" aria-labelledby="iss-merge-heading">
+      <h2 id="iss-merge-heading" className="iss-label is-count">Merge decisions <span className="iss-count">0</span></h2>
+      <div role="status" className="iss-merge-empty">
+        <span className="iss-merge-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 9v12M6 9a9 9 0 0 0 9 9" strokeLinecap="round" /></svg>
+        </span>
+        <div>
+          <p className="iss-merge-title">No merge decisions yet</p>
+          <p className="iss-merge-detail">Awaiting review by a merger.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const COMMENT_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "comment", label: "Comments" },
+  { id: "bid", label: "Bids" },
+  { id: "review", label: "Reviews" },
+  { id: "delivery", label: "Deliveries" },
+  { id: "request_to_merge", label: "Merge requests" },
+] as const;
+type CommentFilter = (typeof COMMENT_FILTERS)[number]["id"];
+
+function ConversationCard({ issue, detail }: { issue: Issue; detail: IssueDetail }) {
+  const [filter, setFilter] = useState<CommentFilter>("all");
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [added, setAdded] = useState<IssueComment[]>([]);
+  const comments = [...detail.comments, ...added];
+  // Every mock comment is a plain comment; the other types count zero.
+  const countFor = (id: CommentFilter) => (id === "all" || id === "comment" ? comments.length : 0);
+  const shown = filter === "all" || filter === "comment" ? comments : [];
+  return (
+    <section id="conversation" className="iss-card is-wide" aria-labelledby="iss-conversation-heading">
+      <div className="iss-conversation-head">
+        <h2 id="iss-conversation-heading" className="iss-label is-count">Conversation <span className="iss-count">{comments.length}</span></h2>
+        <button type="button" className="iss-add-comment" aria-expanded={composing} onClick={() => setComposing(!composing)}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          Add comment
+        </button>
+      </div>
+      {composing ? (
+        <form
+          className="iss-comment-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!draft.trim()) return;
+            setAdded([...added, { author: detailOwnerOrYou(detail), body: draft.trim(), minsAgo: 0 }]);
+            setDraft("");
+            setComposing(false);
+          }}
+        >
+          <label className="sr-only" htmlFor="iss-comment-body">Comment</label>
+          <textarea id="iss-comment-body" rows={3} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Leave a comment" />
+          <div className="iss-form-actions">
+            <button type="submit" className="iss-button is-primary" disabled={!draft.trim()}>Comment</button>
+            <button type="button" className="iss-button is-ghost" onClick={() => setComposing(false)}>Cancel</button>
+          </div>
+        </form>
+      ) : null}
+      <div className="iss-thread">
+        {comments.length > 0 ? (
+          <div className="iss-filters">
+            {COMMENT_FILTERS.map((tab) => (
+              <button key={tab.id} type="button" aria-pressed={filter === tab.id} onClick={() => setFilter(tab.id)} className="iss-filter">
+                {tab.label}
+                <span className="iss-filter-count tabular">{countFor(tab.id)}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {shown.length === 0 ? (
+          <p className="iss-empty">{comments.length === 0 ? "No comments yet." : "Nothing of this type yet."}</p>
+        ) : (
+          <ul className="iss-comments">
+            {shown.map((comment, index) => (
+              <li key={`${comment.author}-${comment.minsAgo}-${index}`}>
+                <article className="iss-comment">
+                  <div className="iss-comment-head">
+                    <PersonName name={comment.author} agent={comment.agent} creator={comment.author === issue.reporter} />
+                    <span className="iss-comment-time">{formatAge(comment.minsAgo)}</span>
+                  </div>
+                  <p className="iss-comment-body">{comment.body}</p>
+                </article>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function detailOwnerOrYou(detail: IssueDetail): string {
+  return detail.owner ?? "You";
+}
+
+type ActivityEntry = { key: string; type: string; actor: string; summary: string; when: string };
+
+/** The Activity card's entries, newest first: steering from the run, then the issue's own history. */
+function activityFor(issue: Issue, detail: IssueDetail, state: RunState | null): ActivityEntry[] {
+  const agent = issue.worker ?? "Agent";
+  const steering: ActivityEntry[] = state
     ? state.events
-        .filter((e) => e.actor !== "agent" || e.kind === "ack" || e.kind === "ask" || e.kind === "resolve")
+        .filter((e) => e.actor !== "agent" || e.kind === "ack" || e.kind === "ask" || e.kind === "pr" || e.kind === "resolve")
         .map((e) => {
-          const Icon = e.actor === "human" ? UserIcon : EVENT_ICONS[e.kind];
-          const text = e.kind === "ask" ? `${issue.worker} asked a question` : e.kind === "ack" ? `${issue.worker}: ${e.title}` : e.title;
-          return { key: `run-${e.id}`, icon: <Icon size={12} />, text, when: `run ${formatClock(e.at)}`, human: e.actor === "human" };
+          const when = `run ${formatClock(e.at)}`;
+          if (e.actor === "human") return { key: `run-${e.id}`, type: "Steer", actor: "You", summary: e.title.replace(/^You /, ""), when };
+          if (e.actor === "system") return { key: `run-${e.id}`, type: "Steer", actor: "Ziki", summary: e.detail ? `${e.title}. ${e.detail}` : e.title, when };
+          const summary = e.kind === "ask" ? `asked: ${e.title}` : e.kind === "ack" ? `${e.title} ${e.detail ?? ""}`.trim() : e.title;
+          return { key: `run-${e.id}`, type: "Agent", actor: agent, summary, when };
         })
         .reverse()
     : [];
-  const history: ActivityItem[] = [];
-  if (state && issue.worker) history.push({ key: "claimed", icon: <BotIcon size={12} />, text: `${issue.worker} claimed it for ${detail.owner ?? "its owner"}`, when: "12m ago" });
+  const history: ActivityEntry[] = [];
+  if (issue.status === "resolved" && issue.resolvedBy && !state) {
+    history.push({ key: "resolved", type: "Status changed", actor: issue.resolvedBy, summary: "marked this issue resolved", when: formatAge(issue.updatedMinsAgo) });
+  }
+  const claim = detail.decisions.find((d) => d.kind === "claimed");
+  if (claim) history.push({ key: "claimed", type: "Claimed", actor: claim.agent, summary: `claimed this issue for ${claim.person}`, when: formatAge(Math.min(detail.createdMinsAgo - 1, 12)) });
   const confirmed = detail.decisions.filter((d) => d.kind === "confirmed").length;
-  if (confirmed) history.push({ key: "confirmed", icon: <CheckIcon size={12} />, text: `Confirmed by ${confirmed} ${confirmed === 1 ? "bot" : "bots"}`, when: "2h ago" });
-  history.push({ key: "reported", icon: <UserIcon size={12} />, text: `Reported by ${issue.reporter}`, when: formatAge(Math.max(issue.updatedMinsAgo, 240)) });
+  if (confirmed) history.push({ key: "confirmed", type: "Confirmed", actor: `${confirmed} ${confirmed === 1 ? "bot" : "bots"}`, summary: "confirmed this issue is real", when: formatAge(detail.createdMinsAgo - 30) });
+  history.push({ key: "created", type: "Created", actor: issue.reporter, summary: "reported this issue", when: formatAge(detail.createdMinsAgo) });
   return [...steering, ...history];
+}
+
+function ActivityCard({ entries }: { entries: ActivityEntry[] }) {
+  return (
+    <section className="iss-card is-rail" aria-label="Activity">
+      <details className="iss-activity">
+        <summary>
+          <span className="iss-activity-head">
+            <h2 className="iss-label">Activity ({entries.length})</h2>
+            <span aria-hidden="true" className="iss-activity-caret">▸</span>
+          </span>
+          <p className="iss-hint">Read-only history of changes on this issue.</p>
+        </summary>
+        <ol className="iss-timeline">
+          {entries.map((entry) => (
+            <li key={entry.key}>
+              <span className="iss-timeline-dot" aria-hidden="true" />
+              <div className="iss-timeline-meta">
+                <span className="iss-timeline-type">{entry.type}</span>
+                <span className="iss-timeline-when">{entry.when}</span>
+              </div>
+              <div className="iss-timeline-text"><strong>{entry.actor}</strong> {entry.summary}</div>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </section>
+  );
 }
 
 function IssueLayout({
@@ -461,112 +756,126 @@ function IssueLayout({
   const detail = detailFor(issue);
   const activity = activityFor(issue, detail, run?.state ?? null);
   const typeName = issue.type === "security" ? "Security" : issue.type === "feature" ? "Feature" : "Bug";
-  return (
-    <div className="dt">
-      <div className="dt-top">
-        <Link href="/issues" className="dt-back">← Issues</Link>
-        {demoBar}
-      </div>
+  const resolved = issue.status === "resolved";
+  const resolvedByAgent = resolved && issue.resolvedBy != null && issue.resolvedBy === issue.worker;
+  const prOpened = resolvedByAgent || (run?.state.events.some((e) => e.kind === "pr") ?? false);
+  const prUrl = `https://github.com/Zedu-Endor/issue-tracker/pull/${issue.number + 8}`;
+  const passed = detail.stage === "confirmed" || detail.stage === "ready";
+  const flying = celebrating === "flying" ? "flying" : undefined;
 
-      <header className="dt-head" data-celebrating={celebrating === "flying" ? "flying" : undefined} data-done={isDone(issue.status) || undefined}>
-        <div className="dt-head-main">
-          <div className="dt-title-row">
-            <span className={`issues-type-disc is-${issue.type} is-large`} data-bug-origin={issue.number} aria-hidden="true">
-              <span className="issues-type-icon"><TypeIcon type={issue.type} size={20} /></span>
-              <span className="issues-type-done"><CheckIcon size={20} /></span>
-            </span>
+  return (
+    <div className="iss" data-done={isDone(issue.status) || undefined}>
+      {demoBar ? <div className="iss-demo">{demoBar}</div> : null}
+
+      {resolved ? (
+        <section aria-label="Resolution note" className="iss-card is-resolution" data-celebrating={flying}>
+          <h2>
+            Resolved by {issue.resolvedBy ?? "a teammate"}
+            <span>{formatAge(issue.updatedMinsAgo)}</span>
+          </h2>
+          <p>{detail.resolutionNote}</p>
+        </section>
+      ) : null}
+
+      <div className="iss-head">
+        <div className="iss-head-main">
+          <div className="iss-title-row">
+            <Link href="/issues" aria-label="Back to issues" title="Back to issues" className="iss-back">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+            </Link>
             <h1>
-              <span className="dt-num tabular">{formatIssueNumber(issue.number)}</span> {issue.title}
+              <span className="iss-number tabular" data-bug-origin={issue.number} data-bug-priority="1">{formatIssueNumber(issue.number)}</span> {issue.title}
             </h1>
           </div>
-          <p className="dt-chips">
-            <span className="dt-chip">{typeName}</span>
-            <span className="dt-chip">{issue.category}</span>
-            <span className="dt-chip">{severityLabels[issue.severity]} priority</span>
+          {resolvedByAgent ? (
+            <div className="iss-agent-resolved">
+              <p>
+                Resolved by <span className="is-strong">{issue.resolvedBy}</span> because{" "}
+                <a href={prUrl} target="_blank" rel="noopener noreferrer">its pull request</a> was merged.
+              </p>
+              <button type="button" className="iss-button is-secondary" onClick={() => changeStatus(issue.number, "open")}>Reopen</button>
+            </div>
+          ) : null}
+          <p className="iss-chips">
+            <span className="iss-chip is-neutral">{typeName}</span>
+            <span className="iss-chip is-neutral">{issue.category}</span>
           </p>
         </div>
-        <span className="issues-vote dt-vote" title={`${issue.votes} upvotes`}>
-          <ChevronUpIcon size={14} />
-          <span className="tabular">{issue.votes}</span>
-          <span className="sr-only">upvotes</span>
-        </span>
-      </header>
+        <div className="iss-head-actions">
+          <VoteControl votes={issue.votes} />
+        </div>
+      </div>
 
-      <div className="dt-cols">
-        <div className="dt-main">
-          <section className="dt-card" aria-labelledby="dt-description">
-            <h2 id="dt-description" className="dt-label">Description</h2>
-            <p className="dt-body">{detail.description}</p>
+      <div className="iss-cols">
+        <div className="iss-main">
+          <section className="iss-card" aria-label="Description">
+            <div className="iss-card-head">
+              <h2 className="iss-label">Description</h2>
+            </div>
+            <div className="iss-description">{detail.description}</div>
           </section>
 
-          <DecisionsStrip decisions={detail.decisions} />
+          <AgentDecisionsSummary decisions={detail.decisions} passed={passed} />
 
-          {run ? run.card : (
-            <p className="dt-hint">
-              {isDone(issue.status) ? "This issue is done; no agent is working on it." : "No agent has claimed this issue yet, so there's nothing to steer."}{" "}
-              Try <Link href="/issues/1432#live">#1432</Link> to see Live steer &amp; pause.
-            </p>
-          )}
+          {run ? run.card : null}
 
-          <section className="dt-card" aria-labelledby="dt-conversation">
-            <h2 id="dt-conversation" className="dt-label">Conversation {detail.comments.length ? `(${detail.comments.length})` : ""}</h2>
-            {detail.comments.length === 0 ? (
-              <p className="muted dt-body">No comments yet.</p>
-            ) : (
-              <ul className="dt-comments">
-                {detail.comments.map((comment) => (
-                  <li key={`${comment.author}-${comment.minsAgo}`}>
-                    {comment.agent ? <BotAvatar name={comment.author} size={28} /> : <span className="dt-person" aria-hidden="true">{comment.author[0]}</span>}
-                    <div>
-                      <p className="dt-comment-meta"><strong>{comment.author}</strong> · {formatAge(comment.minsAgo)}</p>
-                      <p className="dt-body">{comment.body}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          <UpdateStatusCard issue={issue} />
+
+          <MergeDecisionsCard />
+
+          <ConversationCard issue={issue} detail={detail} />
         </div>
 
-        <aside className="dt-side" aria-label="Issue details">
-          <section className="dt-card is-compact" aria-labelledby="dt-status">
-            <h2 id="dt-status" className="dt-label">Status</h2>
-            <div className="dt-status-row">
-              <span className={`dt-status-chip is-${issue.status}`}>{statusLabels[issue.status]}</span>
+        <aside className="iss-side" aria-label="Issue details">
+          <section aria-label="Status" className="iss-card is-compact" data-celebrating={flying}>
+            <h2 className="iss-label">Status</h2>
+            <div className="iss-chips is-status">
+              <span className={`iss-chip is-${issue.status}`} data-bug-origin={issue.number} data-bug-priority="0">
+                <span className="iss-chip-dot" aria-hidden="true" />
+                {statusLabels[issue.status]}
+              </span>
+              <span className={`iss-chip is-severity-${issue.severity}`}>{severityLabels[issue.severity]}</span>
+              {detail.stage ? <span className={`iss-chip is-stage-${detail.stage}`}>{stageLabels[detail.stage]}</span> : null}
               {run && run.state.phase !== "done" ? <PhasePill state={run.state} /> : null}
             </div>
-            <label className="issues-status-select is-detail">
-              <span className="sr-only">Change status</span>
-              <select value={issue.status} onChange={(event) => changeStatus(issue.number, event.target.value as Status)}>
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>{statusLabels[status]}</option>
-                ))}
-              </select>
-            </label>
+            <p className="iss-hint">Opened {formatAge(detail.createdMinsAgo)} by {issue.reporter}</p>
           </section>
 
-          <section className="dt-card is-compact" aria-labelledby="dt-people">
-            <h2 id="dt-people" className="dt-label">People</h2>
-            <dl className="dt-people">
-              <div><dt>Reporter</dt><dd>{issue.reporter}</dd></div>
-              {run && issue.worker ? (
-                <div><dt>Working</dt><dd><a href="#live">{issue.worker}</a> <span className="muted">for {detail.owner ?? "its owner"}</span></dd></div>
-              ) : null}
-            </dl>
+          <section className="iss-card is-compact" aria-label="People">
+            <span className="iss-label">People</span>
+            <div className="iss-people-row">
+              <span className="iss-people-label">Reporter</span>
+              <PersonName name={issue.reporter} creator />
+            </div>
+            <div className="iss-people-row">
+              <span className="iss-people-label">Assignee</span>
+              {detail.assignee ? <PersonName name={detail.assignee} /> : <span className="iss-muted">Unassigned</span>}
+            </div>
+            {run && issue.worker && run.state.phase !== "done" ? (
+              <div className="iss-people-row">
+                <span className="iss-people-label">Working</span>
+                <a href="#live" className="iss-working"><BotAvatar name={issue.worker} small /> {issue.worker}</a>
+              </div>
+            ) : null}
           </section>
 
-          <section className="dt-card is-compact" aria-labelledby="dt-activity">
-            <h2 id="dt-activity" className="dt-label">Activity</h2>
-            <ol className="dt-activity">
-              {activity.map((item) => (
-                <li key={item.key} className={item.human ? "is-human" : undefined}>
-                  <span className="dt-activity-icon" aria-hidden="true">{item.icon}</span>
-                  <span className="dt-activity-text">{item.text}</span>
-                  <span className="dt-activity-when">{item.when}</span>
+          <section className="iss-card is-compact" aria-label="GitHub PR">
+            <h2 className="iss-label">GitHub PR</h2>
+            {prOpened ? (
+              <ul className="iss-pr-list">
+                <li>
+                  <a href={prUrl} target="_blank" rel="noopener noreferrer">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                    {prUrl}
+                  </a>
                 </li>
-              ))}
-            </ol>
+              </ul>
+            ) : (
+              <p className="iss-muted is-gap">No GitHub PR attached to this report.</p>
+            )}
           </section>
+
+          <ActivityCard entries={activity} />
         </aside>
       </div>
     </div>

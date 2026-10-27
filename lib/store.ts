@@ -80,14 +80,20 @@ function setPhase(number: number, phase: CelebrationPhase | null) {
   emit({ ...state, celebrating });
 }
 
-/** The bug icon to launch from: the first one on screen marked for this issue. */
+/**
+ * Where the bug takes off: among the elements marked for this issue, the one
+ * on screen with the lowest data-bug-priority (the Status chip beats the
+ * title on the issue page; on a phone the title wins while the Status box is
+ * scrolled out of view).
+ */
 function originFor(number: number): DOMRect | null {
-  const nodes = document.querySelectorAll<HTMLElement>(`[data-bug-origin="${number}"]`);
-  for (const node of nodes) {
-    const rect = node.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) return rect;
-  }
-  return null;
+  const nodes = [...document.querySelectorAll<HTMLElement>(`[data-bug-origin="${number}"]`)];
+  const visible = nodes
+    .map((node) => ({ rect: node.getBoundingClientRect(), priority: Number(node.dataset.bugPriority ?? 1) }))
+    .filter(({ rect }) => rect.width > 0 && rect.height > 0)
+    .sort((a, b) => a.priority - b.priority);
+  const onScreen = visible.find(({ rect }) => rect.bottom > 0 && rect.top < window.innerHeight);
+  return (onScreen ?? visible[0])?.rect ?? null;
 }
 
 /**
@@ -97,7 +103,7 @@ function originFor(number: number): DOMRect | null {
 export function changeStatus(number: number, status: Status, by: string = "You") {
   load();
   const before = state.issues.find((issue) => issue.number === number);
-  const result = setStatus(state.issues, number, status);
+  const result = setStatus(state.issues, number, status, by);
   if (result.issues === state.issues || !before) return;
   emit({ ...state, issues: result.issues });
   save();

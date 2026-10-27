@@ -48,24 +48,39 @@ function Announcer() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  // Like the real (app) layout: the signed-in pages (here, the Issues routes) use Inter.
+  const appShell = pathname.startsWith("/issues");
   return (
     <>
       <a href="#main" className="zk-skip">Skip to content</a>
       <header className="zk-header">
-        <Link href="/" className="zk-brand">
-          <ZikiMark />
-          <span>Ziki</span>
-          <span className="zk-brand-tag">proposals</span>
-        </Link>
-        <nav aria-label="Prototype" className="zk-nav">
-          {NAV.map((item) => (
-            <Link key={item.href} href={item.href} aria-current={isActive(pathname, item.href) ? "page" : undefined}>
-              {item.label}
+        <div className="zk-header-inner">
+          <div className="zk-brand-group">
+            <Link href="/" className="zk-brand" aria-label="Ziki proposals">
+              <ZikiMark />
+              <span className="zk-brand-word" aria-hidden="true">ziki</span>
             </Link>
-          ))}
-        </nav>
+            <span className="zk-brand-rule" aria-hidden="true" />
+            <span className="zk-workspace">
+              Team Zendor
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+            </span>
+            <span className="zk-brand-tag">proposals</span>
+          </div>
+          <nav aria-label="Prototype" className="zk-nav">
+            {NAV.map((item) => (
+              <Link key={item.href} href={item.href} aria-current={isActive(pathname, item.href) ? "page" : undefined}>
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <span className="zk-account" title="Prototype: signed in as Stephen Okoro">
+            <span className="iss-avatar is-solid" aria-hidden="true">SO</span>
+            <span className="zk-account-name">Stephen Okoro</span>
+          </span>
+        </div>
       </header>
-      <main id="main" className="zk-main">
+      <main id="main" className="zk-main" data-app-shell={appShell ? "" : undefined}>
         {children}
       </main>
       <Announcer />

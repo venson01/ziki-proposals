@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Manrope } from "next/font/google";
+import { Geist_Mono, Inter, Manrope } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
 import "./globals.css";
 
 const manrope = Manrope({ variable: "--font-manrope", subsets: ["latin"], weight: ["400", "500", "600", "700", "800"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+// The signed-in app's typeface (the real app switches to it inside the app shell).
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
   title: { default: "Ziki proposals", template: "%s · Ziki proposals" },
@@ -14,7 +16,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={`${manrope.variable} ${geistMono.variable}`}>
+      <body className={`${manrope.variable} ${geistMono.variable} ${inter.variable}`}>
         <AppShell>{children}</AppShell>
       </body>
     </html>

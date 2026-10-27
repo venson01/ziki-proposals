@@ -23,6 +23,8 @@ export type Issue = {
   agentRun: boolean;
   /** Minutes since the last update, for the "2h ago" label. */
   updatedMinsAgo: number;
+  /** Who resolved it (a person or an agent), for the issue page's resolution note. */
+  resolvedBy?: string | null;
 };
 
 export const STATUSES: Status[] = ["open", "in_progress", "resolved", "closed"];
@@ -94,12 +96,14 @@ export function setStatus(
   issues: Issue[],
   number: number,
   status: Status,
+  by: string | null = null,
 ): { issues: Issue[]; celebrate: boolean } {
   const current = issues.find((issue) => issue.number === number);
   if (!current || current.status === status) return { issues, celebrate: false };
+  const resolvedBy = status === "resolved" ? by : null;
   return {
     issues: issues.map((issue) =>
-      issue.number === number ? { ...issue, status, updatedMinsAgo: 0 } : issue,
+      issue.number === number ? { ...issue, status, updatedMinsAgo: 0, resolvedBy } : issue,
     ),
     celebrate: status === "resolved",
   };
@@ -230,6 +234,7 @@ export const SEED_ISSUES: Issue[] = [
     worker: "Charles Xavier",
     agentRun: false,
     updatedMinsAgo: 1440,
+    resolvedBy: "Charles Xavier",
   },
   {
     number: 1402,
