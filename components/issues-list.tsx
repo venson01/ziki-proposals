@@ -84,7 +84,7 @@ function IssueRow({ issue, phase, last }: { issue: Issue; phase: CelebrationPhas
       <span className="issues-status-cell">
         <RowStatus issue={issue} />
         {issue.agentRun && issue.status === "in_progress" ? (
-          <Link href={`/issues/${issue.number}`} className="issues-watch">Watch &amp; steer</Link>
+          <Link href={`/issues/${issue.number}#live`} className="issues-watch">Watch &amp; steer</Link>
         ) : null}
       </span>
       <span className="issues-priority" title={`${severityLabels[issue.severity]} priority`}>

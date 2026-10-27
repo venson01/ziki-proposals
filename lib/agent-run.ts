@@ -6,9 +6,14 @@
  * - Pause and Redirect take effect at the next checkpoint: a point the agent
  *   declares safe to stop (nothing half-written).
  * - A redirect changes the remaining plan, and the agent says how.
+ * - When the agent needs a decision it asks and waits ("Waiting on you").
+ * - The claim's clock stops while the agent is paused or waiting on a person.
  */
 
-export type StepKind = "read" | "search" | "plan" | "edit" | "test" | "pr" | "resolve";
+export type StepKind = "read" | "search" | "plan" | "edit" | "test" | "pr" | "ask" | "resolve";
+
+/** One answer to an agent's question; a preset answer also changes the plan. */
+export type AskOption = { label: string; preset?: RedirectPreset };
 
 export type PlannedStep = {
   kind: StepKind;
@@ -21,6 +26,8 @@ export type PlannedStep = {
   /** Dropped by "Don't touch the schema"; replaced by `alt` when given. */
   schema?: boolean;
   alt?: PlannedStep;
+  /** For an "ask" step: the answers offered. */
+  options?: AskOption[];
 };
 
 export type RedirectPreset = "tests_first" | "smaller_scope" | "no_schema" | "reuse_existing";
@@ -34,7 +41,7 @@ export const REDIRECT_PRESETS: { value: RedirectPreset; label: string }[] = [
 
 export type Redirect = { preset: RedirectPreset | null; note: string };
 
-export type EventKind = StepKind | "pause" | "paused" | "resume" | "redirect" | "ack";
+export type EventKind = StepKind | "pause" | "paused" | "resume" | "redirect" | "ack" | "answer";
 
 export type RunEvent = {
   id: number;
@@ -47,8 +54,12 @@ export type RunEvent = {
   at: number;
 };
 
-/** working → pausing (asked, waiting for a checkpoint) → paused; done is final. */
-export type RunPhase = "working" | "pausing" | "paused" | "done";
+/**
+ * working → pausing (asked, waiting for a checkpoint) → paused.
+ * working → waiting (the agent asked a person something) → working.
+ * done is final.
+ */
+export type RunPhase = "working" | "pausing" | "paused" | "waiting" | "done";
 
 export type RunState = {
   phase: RunPhase;
@@ -58,6 +69,14 @@ export type RunState = {
   pendingRedirect: Redirect | null;
   /** Redirects the agent has taken on, for the "save as project rule" prompt. */
   applied: Redirect[];
+  /** The question the agent is waiting on, while phase is "waiting". */
+  question: PlannedStep | null;
+  /** Where an answer leads: a pause asked for before the question still holds. */
+  afterAnswer: "working" | "paused";
+  /** When the claim's clock stopped (paused or waiting), or null while it runs. */
+  stoppedAt: number | null;
+  /** Total time the clock has been stopped, added to the claim deadline. */
+  stoppedMs: number;
   nextId: number;
 };
 
@@ -65,10 +84,40 @@ export type RunAction =
   | { type: "tick"; at: number }
   | { type: "pause"; at: number }
   | { type: "resume"; at: number }
-  | { type: "redirect"; at: number; redirect: Redirect };
+  | { type: "redirect"; at: number; redirect: Redirect }
+  | { type: "answer"; at: number; option: number | null; note: string };
+
+/** How long a claim lasts before the agent must deliver (Ziki's claim deadline). */
+export const CLAIM_MINUTES = 45;
 
 export function startRun(plan: PlannedStep[]): RunState {
-  return { phase: "working", events: [], queue: plan, pendingRedirect: null, applied: [], nextId: 1 };
+  return {
+    phase: "working",
+    events: [],
+    queue: plan,
+    pendingRedirect: null,
+    applied: [],
+    question: null,
+    afterAnswer: "working",
+    stoppedAt: null,
+    stoppedMs: 0,
+    nextId: 1,
+  };
+}
+
+/** The claim deadline, pushed back by any stopped time; null while the clock is stopped. */
+export function claimDeadline(startedAt: number, state: RunState): number | null {
+  if (state.stoppedAt !== null) return null;
+  return startedAt + CLAIM_MINUTES * 60_000 + state.stoppedMs;
+}
+
+function stopClock(state: RunState, at: number): RunState {
+  return state.stoppedAt === null ? { ...state, stoppedAt: at } : state;
+}
+
+function startClock(state: RunState, at: number): RunState {
+  if (state.stoppedAt === null) return state;
+  return { ...state, stoppedAt: null, stoppedMs: state.stoppedMs + Math.max(0, at - state.stoppedAt) };
 }
 
 function push(state: RunState, event: Omit<RunEvent, "id">): RunState {
@@ -140,7 +189,7 @@ function applyRedirect(state: RunState, redirect: Redirect, at: number): RunStat
 export function runReducer(state: RunState, action: RunAction): RunState {
   switch (action.type) {
     case "tick": {
-      if (state.phase === "paused" || state.phase === "done") return state;
+      if (state.phase === "paused" || state.phase === "waiting" || state.phase === "done") return state;
       const [step, ...rest] = state.queue;
       if (!step) return { ...state, phase: "done" };
       let next = push(
@@ -148,12 +197,20 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         { actor: "agent", kind: step.kind, title: step.title, detail: step.detail, checkpoint: step.checkpoint, at: action.at },
       );
       if (step.kind === "resolve") return { ...next, phase: "done", pendingRedirect: null };
+      if (step.kind === "ask") {
+        // The agent stops to ask; a pause asked for earlier still holds after the answer.
+        next = stopClock(
+          { ...next, phase: "waiting", question: step, afterAnswer: state.phase === "pausing" ? "paused" : "working" },
+          action.at,
+        );
+        return next.pendingRedirect ? applyRedirect(next, next.pendingRedirect, action.at) : next;
+      }
       // Steering lands only where the agent said it's safe to stop.
       if (step.checkpoint || rest.length === 0) {
         if (next.pendingRedirect) next = applyRedirect(next, next.pendingRedirect, action.at);
         if (next.phase === "pausing") {
           next = push(
-            { ...next, phase: "paused" },
+            stopClock({ ...next, phase: "paused" }, action.at),
             { actor: "system", kind: "paused", title: "Paused at a checkpoint", detail: `Stopped safely after: ${step.title}`, at: action.at },
           );
         }
@@ -166,18 +223,45 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     }
     case "resume": {
       if (state.phase !== "paused" && state.phase !== "pausing") return state;
-      return push({ ...state, phase: "working" }, { actor: "human", kind: "resume", title: "You resumed the agent", at: action.at });
+      return push(startClock({ ...state, phase: "working" }, action.at), { actor: "human", kind: "resume", title: "You resumed the agent", at: action.at });
+    }
+    case "answer": {
+      if (state.phase !== "waiting" || !state.question) return state;
+      const option = action.option === null ? null : state.question.options?.[action.option] ?? null;
+      const note = action.note.trim();
+      if (!option && !note) return state;
+      let next = push(state, {
+        actor: "human",
+        kind: "answer",
+        title: option ? `You answered: ${option.label}` : "You answered with a note",
+        detail: note || undefined,
+        at: action.at,
+      });
+      if (option?.preset || !option) {
+        // An answer that changes course is handled like a redirect, and can become a project rule.
+        next = applyRedirect(next, { preset: option?.preset ?? null, note }, action.at);
+      } else {
+        next = push(next, { actor: "agent", kind: "ack", title: "Thanks. Carrying on as planned.", at: action.at });
+      }
+      next = { ...next, question: null, phase: state.afterAnswer, afterAnswer: "working" };
+      if (next.phase === "working") return startClock(next, action.at);
+      return push(next, { actor: "system", kind: "paused", title: "Paused at a checkpoint", detail: "Stopped after your answer, as you asked.", at: action.at });
     }
     case "redirect": {
       if (state.phase === "done") return state;
       const { redirect } = action;
       if (!redirect.preset && !redirect.note.trim()) return state;
       const next = push(state, { actor: "human", kind: "redirect", title: "You redirected the agent", detail: describeRedirect(redirect), at: action.at });
-      // Paused means already at a checkpoint: the agent takes it on now.
-      if (state.phase === "paused") return applyRedirect(next, redirect, action.at);
+      // Paused or waiting means already stopped at a checkpoint: the agent takes it on now.
+      if (state.phase === "paused" || state.phase === "waiting") return applyRedirect(next, redirect, action.at);
       return { ...next, pendingRedirect: redirect };
     }
   }
+}
+
+/** True while the agent is stopped and the claim clock isn't running. */
+export function isStopped(phase: RunPhase): boolean {
+  return phase === "paused" || phase === "waiting";
 }
 
 /** The step after which a pause or redirect would land. */
@@ -203,6 +287,13 @@ const VOTE_PLAN: PlannedStep[] = [
     kind: "plan",
     title: "Plan: make voting idempotent and disable the button while a vote is in flight",
     checkpoint: true,
+  },
+  {
+    kind: "ask",
+    title: "A unique constraint on votes changes the schema and needs a migration. OK to go ahead?",
+    detail: "Or I can leave the schema alone and make the vote action idempotent with an upsert.",
+    checkpoint: true,
+    options: [{ label: "Go ahead with the migration" }, { label: "Keep the schema as it is", preset: "no_schema" }],
   },
   {
     kind: "edit",

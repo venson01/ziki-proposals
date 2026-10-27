@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLAIM_MINUTES,
+  claimDeadline,
   describeRedirect,
   formatClock,
+  isStopped,
   nextCheckpoint,
   planFor,
   revisePlan,
@@ -25,6 +28,103 @@ function run(state: RunState, ...actions: RunAction[]): RunState {
   return actions.reduce(runReducer, state);
 }
 const tick: RunAction = { type: "tick", at: 0 };
+const tickAt = (at: number): RunAction => ({ type: "tick", at });
+
+const ASK_PLAN: PlannedStep[] = [
+  { kind: "plan", title: "Plan", checkpoint: true },
+  {
+    kind: "ask",
+    title: "Schema change OK?",
+    checkpoint: true,
+    options: [{ label: "Go ahead" }, { label: "Keep the schema", preset: "no_schema" }],
+  },
+  { kind: "edit", title: "Schema", checkpoint: true, schema: true, alt: { kind: "edit", title: "Upsert", checkpoint: true } },
+  { kind: "resolve", title: "Resolve" },
+];
+const MINUTES = CLAIM_MINUTES * 60_000;
+
+describe("waiting on you", () => {
+  it("stops to ask, and stops the claim clock while it waits", () => {
+    const state = run(startRun(ASK_PLAN), tickAt(0), tickAt(1_000));
+    expect(state.phase).toBe("waiting");
+    expect(isStopped(state.phase)).toBe(true);
+    expect(state.question?.title).toBe("Schema change OK?");
+    expect(state.events.at(-1)).toMatchObject({ actor: "agent", kind: "ask" });
+    expect(claimDeadline(0, state)).toBeNull();
+    expect(runReducer(state, tickAt(2_000))).toBe(state);
+  });
+
+  it("carries on as planned after a plain answer, with the stopped time added to the deadline", () => {
+    const state = run(startRun(ASK_PLAN), tickAt(0), tickAt(1_000), { type: "answer", at: 6_000, option: 0, note: "" });
+    expect(state.phase).toBe("working");
+    expect(state.question).toBeNull();
+    expect(state.events.map((e) => e.title).slice(-2)).toEqual(["You answered: Go ahead", "Thanks. Carrying on as planned."]);
+    expect(state.queue[0].title).toBe("Schema");
+    expect(state.stoppedMs).toBe(5_000);
+    expect(claimDeadline(0, state)).toBe(MINUTES + 5_000);
+    expect(state.applied).toHaveLength(0);
+  });
+
+  it("changes course after an answer with a preset, and offers it as a rule", () => {
+    const state = run(startRun(ASK_PLAN), tick, tick, { type: "answer", at: 0, option: 1, note: "" });
+    expect(state.queue[0].title).toBe("Upsert");
+    expect(state.events.at(-1)?.kind).toBe("ack");
+    expect(state.applied).toEqual([{ preset: "no_schema", note: "" }]);
+  });
+
+  it("re-plans around an answer given only as a note", () => {
+    const state = run(startRun(ASK_PLAN), tick, tick, { type: "answer", at: 0, option: null, note: "Use the votes table" });
+    expect(state.queue[0]).toMatchObject({ kind: "plan", detail: "Use the votes table" });
+    expect(state.events.find((e) => e.kind === "answer")?.title).toBe("You answered with a note");
+  });
+
+  it("ignores empty answers, and answers when nothing was asked", () => {
+    const waiting = run(startRun(ASK_PLAN), tick, tick);
+    expect(runReducer(waiting, { type: "answer", at: 0, option: null, note: "  " })).toBe(waiting);
+    const working = startRun(ASK_PLAN);
+    expect(runReducer(working, { type: "answer", at: 0, option: 0, note: "" })).toBe(working);
+  });
+
+  it("keeps a pause asked for before the question once it's answered", () => {
+    let state = run(startRun(ASK_PLAN), tickAt(0), { type: "pause", at: 500 }, tickAt(1_000));
+    expect(state.phase).toBe("waiting");
+    expect(state.afterAnswer).toBe("paused");
+    state = runReducer(state, { type: "answer", at: 3_000, option: 0, note: "" });
+    expect(state.phase).toBe("paused");
+    expect(state.events.at(-1)?.kind).toBe("paused");
+    expect(claimDeadline(0, state)).toBeNull();
+    state = runReducer(state, { type: "resume", at: 4_000 });
+    expect(claimDeadline(0, state)).toBe(MINUTES + 3_000);
+  });
+
+  it("takes on a redirect right away while waiting", () => {
+    const state = run(startRun(ASK_PLAN), tick, tick, { type: "redirect", at: 0, redirect: { preset: "tests_first", note: "" } });
+    expect(state.phase).toBe("waiting");
+    expect(state.pendingRedirect).toBeNull();
+    expect(state.queue[0].kind).toBe("test");
+  });
+
+  it("ignores pause while waiting", () => {
+    const waiting = run(startRun(ASK_PLAN), tick, tick);
+    expect(runReducer(waiting, { type: "pause", at: 0 })).toBe(waiting);
+  });
+});
+
+describe("claim clock", () => {
+  it("adds paused time to the deadline", () => {
+    let state = run(startRun(PLAN), tickAt(0), { type: "pause", at: 500 }, tickAt(1_000));
+    expect(state.phase).toBe("paused");
+    expect(claimDeadline(0, state)).toBeNull();
+    state = runReducer(state, { type: "resume", at: 4_000 });
+    expect(claimDeadline(0, state)).toBe(MINUTES + 3_000);
+  });
+
+  it("doesn't stop while a pause is only requested", () => {
+    const state = run(startRun(PLAN), { type: "pause", at: 0 });
+    expect(state.phase).toBe("pausing");
+    expect(claimDeadline(100, state)).toBe(100 + MINUTES);
+  });
+});
 
 describe("runReducer", () => {
   it("works through the plan and finishes on resolve", () => {
